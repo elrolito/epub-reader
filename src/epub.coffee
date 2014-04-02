@@ -39,7 +39,7 @@ class EPub
 
     return deferred.promise
 
-  parseZip: (resource = @resource) ->
+  parseZip: (resource = @resource, encoding = 'utf8') ->
     deferred = Q.defer()
 
     Q.try(
@@ -49,8 +49,8 @@ class EPub
         @zip = new AdmZip resource
 
         Q.allSettled([
-          @getTextContents(@zip, 'mimetype')
-          @getTextContents(@zip, 'META-INF/container.xml')
+          @getZipEntryTextContents(@zip, 'mimetype', encoding)
+          @getZipEntryTextContents(@zip, 'META-INF/container.xml', encoding)
         ]).spread(
           (mimetype, container) ->
             unless mimetype.value is 'application/epub+zip'
@@ -59,11 +59,11 @@ class EPub
             unless container.value?.length
               deferred.reject 'No epub container file found.'
 
+            deferred.notify message: "Getting rootfile(s) for #{resource}"
             return parseXML(container.value)
 
         ).then(
           (xml) =>
-            @rootfile = null
             @rootfiles = []
 
             if _.isArray xml.rootfiles
@@ -71,7 +71,7 @@ class EPub
                 @rootfiles.push rootfile['$']['full-path']
 
             else
-              @rootfile = xml.rootfiles.rootfile['$']['full-path']
+              @rootfiles.push xml.rootfiles.rootfile['$']['full-path']
 
             deferred.resolve @
         )
@@ -83,14 +83,24 @@ class EPub
 
     return deferred.promise
 
-  getTextContents: (zip, entry) ->
+  getZipEntryTextContents: (zip, entry, encoding = 'utf8') ->
     deferred = Q.defer()
 
-    zip.readAsTextAsync entry, (content) ->
-      if content.length
-        deferred.resolve content
-      else
-        deferred.reject "#{entry} not found."
+    unless zip?
+      deferred.reject 'No AdmZip object given.'
+
+    else
+      try
+        zip.readAsTextAsync entry, (content) ->
+          if content.length
+            deferred.resolve content
+          else
+            deferred.reject "#{entry} not found."
+
+        , encoding
+
+      catch error
+        deferred.reject error
 
     return deferred.promise
 

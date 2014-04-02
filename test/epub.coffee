@@ -47,20 +47,24 @@ describe "Epub", ->
         )
 
     it "eventually finds container file, parses, and locates root file(s)", ->
-      epub.init().get('rootfile').should.eventually.be.a 'string'
-      epub.init().get('rootfiles').should.eventually.be.a 'array'
+      rootfiles = epub.init().get('rootfiles')
+      rootfiles.should.eventually.be.a 'array'
+      rootfiles.should.eventually.have.length.above 0
 
-  describe "#getTextContents", ->
+  describe "#getZipEntryTextContents", ->
     it "eventually reads contents of a zip entry", ->
       zip = new AdmZip "#{__dirname}/files/mimetype.zip"
-      epub.getTextContents(zip, 'mimetype').should
+      epub.getZipEntryTextContents(zip, 'mimetype').should
         .eventually.equal 'application/epub+zip'
 
+    it "eventuall throws an error if a zip object is not passed", ->
+      epub.getZipEntryTextContents(null, '').should
+        .eventually.be.rejectedWith 'No AdmZip object given.'
+
     it "eventually throws an error if zip entry does not exist", ->
-      file = "#{__dirname}/files/normal.zip"
-      zip = new AdmZip file
-      epub.getTextContents(zip, 'mimetype').should
-        .eventually.be.rejectedWith "mimetype not found."
+      zip = new AdmZip
+      epub.getZipEntryTextContents(zip, 'mimetype').should
+        .eventually.be.rejectedWith 'mimetype not found.'
 
   describe "#parseZip", ->
     it "eventually rejects non-epub files (mimetype)", ->
