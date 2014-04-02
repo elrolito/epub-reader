@@ -7,9 +7,13 @@ Q = require 'q'
 xml2js = require 'xml2js'
 
 parserOpts =
+  async: true
   normalize: true
+  normalizeTags: true
   explicitArray: false
   explicitRoot: false
+  strict: false
+  xmlns: false
 
 parser = new xml2js.Parser parserOpts
 parseXML = Q.denodeify parser.parseString
@@ -23,19 +27,21 @@ class EPub
   init: ->
     deferred = Q.defer()
 
-    deferred.resolve @zip if @zip?
-
-    if @isRemote
-      Q.try( -> deferred.notify 'Requesting remote resource...')
-      .then( => HTTP.read(@resource))
-      .then(@parseZip)
-      .catch(deferred.reject)
-      .done( => deferred.resolve @)
+    if @zip? and @rendition? and @flow?
+      deferred.resolve @
 
     else
-      @parseZip(@resource)
+      if @isRemote
+        Q.try( -> deferred.notify 'Requesting remote resource...')
+        .then( => HTTP.read(@resource))
+        .then(@parseZip)
         .catch(deferred.reject)
         .done( => deferred.resolve @)
+
+      else
+        @parseZip(@resource)
+          .catch(deferred.reject)
+          .done( => deferred.resolve @)
 
     return deferred.promise
 
@@ -49,8 +55,8 @@ class EPub
         @zip = new AdmZip resource
 
         Q.allSettled([
-          @getZipEntryTextContents(@zip, 'mimetype', encoding)
-          @getZipEntryTextContents(@zip, 'META-INF/container.xml', encoding)
+          @getEntryAsText('mimetype', encoding)
+          @getEntryAsText('META-INF/container.xml', encoding)
         ]).spread(
           (mimetype, container) ->
             unless mimetype.value is 'application/epub+zip'
@@ -71,36 +77,131 @@ class EPub
                 @rootfiles.push rootfile['$']['full-path']
 
             else
-              @rootfiles.push xml.rootfiles.rootfile['$']['full-path']
+              @rootfiles.push xml.rootfiles.rootfile['$']['FULL-PATH']
 
-            deferred.resolve @
+            return @getFlow()
         )
 
     ).catch(
       (error) ->
         deferred.reject error
+
+    ).done(
+      =>
+        deferred.resolve @
     )
 
     return deferred.promise
 
-  getZipEntryTextContents: (zip, entry, encoding = 'utf8') ->
+  getRendition: (renditionIndex = 0) ->
     deferred = Q.defer()
 
-    unless zip?
-      deferred.reject 'No AdmZip object given.'
+    if @rendition?
+      deferred.resolve @rendition
 
     else
-      try
-        zip.readAsTextAsync entry, (content) ->
-          if content.length
-            deferred.resolve content
-          else
-            deferred.reject "#{entry} not found."
+      @getEntryAsText(@rootfiles[renditionIndex])
+        .then(parseXML)
+        .done(
+          (xml) =>
+            @rendition = xml
 
-        , encoding
+            deferred.resolve @rendition
 
-      catch error
-        deferred.reject error
+          , (error) ->
+            deferred.reject error
+        )
+
+    return deferred.promise
+
+  getFlow: (renditionIndex = 0) ->
+    deferred = Q.defer()
+
+    if @flow?
+      deferred.resolve @flow
+
+    else
+      @flow = []
+
+      Q.when @getRendition(renditionIndex), (rendition) =>
+        @manifest = _.pluck rendition.manifest.item, '$'
+        @spine = _.pluck rendition.spine.itemref, '$'
+
+        _.forEach @spine, (item) =>
+          page = _.find @manifest, ID: item['IDREF']
+
+          entry =
+            id: item['IDREF']
+            href: page['HREF']
+            mimetype: page['MEDIA-TYPE']
+
+          @flow.push entry
+
+          deferred.resolve @flow
+
+    return deferred.promise
+
+  getEntryAsText: (entry, encoding = 'utf8') ->
+    deferred = Q.defer()
+
+    unless @zip?
+      deferred.reject "#{@resource} must be initialized first."
+
+    else
+      @getZipEntryByFilename(entry)
+        .then(
+          (zipEntry) =>
+            @zip.readAsTextAsync zipEntry, (content) ->
+              deferred.resolve content
+
+            , encoding
+
+          , (error) ->
+            deferred.reject error
+        )
+
+    return deferred.promise
+
+  getEntryAsBuffer: (entry) ->
+    deferred = Q.defer()
+
+    unless @zip?
+      deferred.reject "#{@resource} must be initialized first."
+
+    else
+      @getZipEntryByFilename(entry)
+        .then(
+          (zipEntry) =>
+            @zip.readFileAsync zipEntry, (contents) ->
+              deferred.resolve contents
+
+          , (error) ->
+            deferred.reject error
+        )
+
+    return deferred.promise
+
+  getZipEntryByFilename: (file) ->
+    deferred = Q.defer()
+
+    unless @zip?
+      deferred.reject "#{@resource} must be initialized first."
+
+    else
+      # Try getting entry by name first
+      fileEntry = @zip.getEntry file
+
+      unless fileEntry?
+        @entries ?= @zip.getEntries()
+
+        fileEntry = _.find @entries, (entry) ->
+          entry.entryName.toLowerCase() is file.toLowerCase()
+
+      if fileEntry?
+        deferred.resolve fileEntry
+
+      else
+        deferred.reject "#{file} not an entry."
 
     return deferred.promise
 

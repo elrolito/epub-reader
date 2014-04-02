@@ -47,24 +47,14 @@ describe "Epub", ->
         )
 
     it "eventually finds container file, parses, and locates root file(s)", ->
-      rootfiles = epub.init().get('rootfiles')
-      rootfiles.should.eventually.be.a 'array'
-      rootfiles.should.eventually.have.length.above 0
+      initializedBook = epub.init()
 
-  describe "#getZipEntryTextContents", ->
-    it "eventually reads contents of a zip entry", ->
-      zip = new AdmZip "#{__dirname}/files/mimetype.zip"
-      epub.getZipEntryTextContents(zip, 'mimetype').should
-        .eventually.equal 'application/epub+zip'
-
-    it "eventuall throws an error if a zip object is not passed", ->
-      epub.getZipEntryTextContents(null, '').should
-        .eventually.be.rejectedWith 'No AdmZip object given.'
-
-    it "eventually throws an error if zip entry does not exist", ->
-      zip = new AdmZip
-      epub.getZipEntryTextContents(zip, 'mimetype').should
-        .eventually.be.rejectedWith 'mimetype not found.'
+      initializedBook
+        .should.eventually.have.deep.property('zip').that.is.an('object')
+      initializedBook
+        .should.eventually.have.deep.property('rendition').that.is.an('object')
+      initializedBook
+        .should.eventually.have.deep.property('flow').that.is.an('array')
 
   describe "#parseZip", ->
     it "eventually rejects non-epub files (mimetype)", ->
@@ -75,3 +65,45 @@ describe "Epub", ->
       noContainer = new EPub "#{__dirname}/files/mimetype.zip"
       noContainer.init().should.be
         .rejectedWith 'No epub container file found.'
+
+  describe "#getRendition", ->
+    it "eventually returns object for a particular rendition", ->
+      epub.init().post('getRendition')
+        .should.eventually.be.an('object')
+        .and.should.eventually.contain.keys 'metadata', 'manifest', 'spine'
+
+  describe "#getFlow", ->
+    it "eventually returns an array of entries", ->
+      epub.init().post('getFlow')
+        .should.eventually.be.an 'array'
+
+  describe "#getEntryAsText", ->
+    it "eventually reads contents of a zip entry", ->
+      epub.init().post('getEntryAsText', ['mimetype'])
+        .should.eventually.equal 'application/epub+zip'
+
+    it "eventuall throws an error if not initialized first", ->
+      uninitializedBook = new EPub 'uninitialized'
+      uninitializedBook.getEntryAsText('file').should
+        .eventually.be.rejectedWith 'uninitialized must be initialized first.'
+
+  describe "#getZipEntryByFilename", ->
+    entry = '18333fig0101-tn.png'
+
+    it "eventually returns a zipEntry object if it exists", ->
+      epub.init().post('getZipEntryByFilename', [entry])
+        .should.eventually.be.an 'object'
+
+    it "is case insensitive", ->
+      epub.init().post('getZipEntryByFilename', [entry.toUpperCase()])
+        .should.eventually.be.an 'object'
+
+    it "eventually throws an error if the entry does not exist", ->
+      epub.init().post('getZipEntryByFilename', ['FAKEFILE'])
+        .should.eventually.be.rejectedWith 'FAKEFILE not an entry.'
+
+  describe "#getEntryAsBuffer", ->
+    it "eventually returns a buffer if entry exists", ->
+      entry = '18333fig0101-tn.png'
+      epub.init().post('getEntryAsBuffer', [entry])
+        .should.eventually.be.an 'object'
