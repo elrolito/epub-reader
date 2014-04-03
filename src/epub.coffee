@@ -15,27 +15,30 @@ class EPub
 
   constructor: (@resource) ->
     @isRemote = (URL.parse @resource).host?
+    @isInitialized = false
 
     return @
 
   init: ->
     deferred = Q.defer()
 
-    if @zip? and @rendition? and @flow?
+    if @zip? and @rendition?
       deferred.resolve @
 
     else
-      if @isRemote
-        Q.try( -> deferred.notify 'Requesting remote resource...')
-        .then( => HTTP.read(@resource))
-        .then(@parseZip)
-        .catch(deferred.reject)
-        .done( => deferred.resolve @)
+      Q.try(
+        =>
+          deferred.notify message: "Initializing #{@resource}..."
 
-      else
-        @parseZip(@resource)
-          .catch(deferred.reject)
-          .done( => deferred.resolve @)
+          if @isRemote
+            deferred.notify "Requesting #{@resource} remotely..."
+            deferred.resolve HTTP.read(@resource).then(@parseZip)
+
+          else
+            deferred.resolve @parseZip(@resource)
+
+      )
+      .catch(deferred.reject)
 
     return deferred.promise
 
@@ -44,84 +47,81 @@ class EPub
 
     Q.try(
       =>
-        deferred.notify message: "Parsing #{resource}"
+        deferred.notify message: "Parsing #{resource}..."
 
         @zip = new AdmZip resource
 
         Q.allSettled([
           @getEntryAsText('mimetype', encoding)
           @getEntryAsText('META-INF/container.xml', encoding)
-        ]).spread(
+        ])
+        .spread(
           (mimetype, container) ->
             unless mimetype.value is 'application/epub+zip'
-              deferred.reject 'Not a valid epub (mimetype).'
+              deferred.reject new TypeError "#{resource} not a valid epub (mimetype)."
 
             unless container.value?.length
-              deferred.reject 'No epub container file found.'
+              deferred.reject new Error "No epub container file found for #{resource}."
 
-            deferred.notify message: "Getting rootfile(s) for #{resource}"
+            deferred.notify message: "Getting rootfile(s) for #{resource}..."
             return parseXML(container.value)
-
-        ).then(
+        )
+        .then(
           (xml) =>
             @rootfiles = []
 
-            if _.isArray xml.rootfiles
-              _.forEach xml.rootfiles, (rootfile) =>
-                @rootfiles.push rootfile['$']['FULL-PATH']
+            _.forEach xml.rootfiles, (rootfile) =>
+              @rootfiles.push rootfile['$']['FULL-PATH']
 
-            else
-              @rootfiles.push xml.rootfiles.rootfile['$']['FULL-PATH']
-
-            return @getRendition()
+            return @render()
         )
-
-    ).catch(
-      (error) ->
-        deferred.reject error
-
-    ).done(
-      =>
-        deferred.resolve @
+        .then( => return @)
     )
+    .catch(deferred.reject)
+    .done(deferred.resolve)
 
     return deferred.promise
 
-  getRendition: (index = 0) ->
+  render: (index = 0) ->
     deferred = Q.defer()
 
-    if @rendition?[index]?
-      deferred.resolve @rendition[index]
+    if @rendition and @rootfiles?[index]?
+      deferred.resolve @rendition
 
     else if @rootfiles[index]?
-      @getEntryAsText(@rootfiles[index])
-        .then(parseXML)
-        .done(
-          (xml) =>
-            @rendition = xml
+      Q.try(
+        =>
+          message = "Rendering #{@resource} using #{@rootfiles[index]}..."
+          deferred.notify message: message
+          @getEntryAsText(@rootfiles[index])
+            .then(parseXML)
+            .catch(deferred.reject)
+            .done(
+              (xml) =>
+                @rendition = xml
 
-            @manifest = _.pluck xml.manifest?.item, '$'
-            @spine = _.pluck xml.spine?.itemref, '$'
+                @manifest = _.pluck xml.manifest?.item, '$'
+                @spine = _.pluck xml.spine?.itemref, '$'
 
-            tocID = xml.spine?['$']['TOC']
-            @tocFile = (_.find @manifest, ID: tocID)['HREF']
+                tocID = xml.spine?['$']['TOC']
+                @tocFile = (_.find @manifest, ID: tocID)['HREF']
 
-            deferred.resolve @rendition
-
-          , (error) ->
-            deferred.reject error
-        )
+                deferred.resolve @rendition
+            )
+      )
 
     else
-      deferred.reject "#{@resource} only has #{@rootfiles.length} rendition(s)."
+      count = @rootfiles.length
+      deferred.reject new RangeError "#{@resource} only has #{count} root file(s)."
 
     return deferred.promise
 
   getFlow: ->
-    deferred = Q.defer()
+    unless @spine? and @manifest?
+      throw new ReferenceError "#{@resource} must be initialized first."
 
     if @flow?
-      deferred.resolve @flow
+      return @flow
 
     else
       @flow = []
@@ -136,9 +136,7 @@ class EPub
 
         @flow.push entry
 
-        deferred.resolve @flow
-
-    return deferred.promise
+      return @flow
 
   getTOC: ->
     deferred = Q.defer()
@@ -162,47 +160,55 @@ class EPub
 
       @getEntryAsText(@tocFile)
         .then(parseXML)
-        .then(
+        .catch(deferred.reject)
+        .done(
           (xml) =>
-            @toc = tocMapper(xml.navmap.navpoint)
-            deferred.resolve @toc
+            unless xml?.navmap?.navpoint
+              ### @TODO: test invalid tocFile for getTOC() ###
+              deferred.reject new TypeError "#{@tocFile} is not a valid toc file."
 
-          , (error) ->
-            deferred.reject error
+            else
+              @toc = tocMapper(xml.navmap.navpoint)
+              deferred.resolve @toc
         )
-
 
     return deferred.promise
 
   getEntryAsText: (href, encoding = 'utf8') ->
     deferred = Q.defer()
 
-    @getZipEntryByFilename(href)
+    @findZipEntry(href)
       .then(
         (entry) =>
           @zip.readAsTextAsync entry, (content) ->
-            deferred.resolve content
+            unless content?.length
+              ### @TODO: test no content error for getEntryAsText() ###
+              deferred.reject new Error "#{href} has no content."
+
+            else
+              deferred.resolve content
 
           , encoding
-
-        , (error) ->
-          deferred.reject error
       )
+      .catch(deferred.reject)
 
     return deferred.promise
 
   getEntryAsBuffer: (href) ->
     deferred = Q.defer()
 
-    @getZipEntryByFilename(href)
+    @findZipEntry(href)
       .then(
         (entry) =>
-          @zip.readFileAsync entry, (contents) ->
-            deferred.resolve contents
+          @zip.readFileAsync entry, (content) ->
+            unless content?.length
+              ### @TODO: test no content error for getEntryAsBuffer() ###
+              deferred.reject new Error "#{href} has no content."
 
-        , (error) ->
-          deferred.reject error
+            else
+              deferred.resolve content
       )
+      .catch(deferred.reject)
 
     return deferred.promise
 
@@ -212,39 +218,49 @@ class EPub
     @getEntryAsBuffer(href)
       .then(
         (data) =>
-          result =
-            data: data
-            mimetype: (_.find @manifest, HREF: href)['MEDIA-TYPE']
+          unless data?
+            ### @TODO: test no data error for getEntry() ###
+            deferred.reject new Error "#{href} has no data."
 
-          deferred.resolve result
+          else
+            result =
+              data: data
+              mimetype: (_.find @manifest, HREF: href)['MEDIA-TYPE']
 
-        , (error) ->
-          deferred.reject error
+            deferred.resolve result
       )
+      .catch(deferred.reject)
 
     return deferred.promise
 
-  getZipEntryByFilename: (href) ->
+  findZipEntry: (name) ->
     deferred = Q.defer()
 
     unless @zip?
-      deferred.reject "#{@resource} must be initialized first."
+      deferred.reject new Error "#{@resource} must be initialized first."
 
     else
-      # Try getting entry by name first
-      fileEntry = @zip.getEntry href
+      # check manifest first by id
+      item = _.find @manifest, ID: name
+
+      # default to checking by passed name
+      entryName = item?['HREF'] || name
+
+      # search the zip for the entry
+      fileEntry = @zip.getEntry entryName
 
       unless fileEntry?
         @entries ?= @zip.getEntries()
 
-        fileEntry = _.find @entries, (href) ->
-          entry.entryName.toLowerCase() is href.toLowerCase()
+        # case insensitive search
+        fileEntry = _.find @entries, (entry) ->
+          entry.entryName.toLowerCase() is name.toLowerCase()
 
-      if fileEntry?
-        deferred.resolve fileEntry
+      unless fileEntry?
+        deferred.reject new Error "#{name} not an entry in #{@resource}."
 
       else
-        deferred.reject "#{href} not an entry."
+        deferred.resolve fileEntry
 
     return deferred.promise
 

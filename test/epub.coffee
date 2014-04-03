@@ -38,6 +38,9 @@ describe "Epub", ->
       epub.isRemote.should.not.be.true
       remoteEpub.isRemote.should.be.true
 
+    it "is not initialized", ->
+      epub.isInitialized.should.not.be.true
+
   describe "#init", ->
     it.skip "makes an http request if resource is remote url", ->
       @timeout 5000 # give enough time to make request
@@ -65,28 +68,41 @@ describe "Epub", ->
 
   describe "#parseZip", ->
     it "eventually rejects non-epub files (mimetype)", ->
-      nonEpub = new EPub "#{__dirname}/files/normal.zip"
-      nonEpub.init().should.be.rejectedWith 'Not a valid epub (mimetype).'
+      resource = "#{__dirname}/files/normal.zip"
+      nonEpub = new EPub resource
+      nonEpub.init()
+        .should.be
+        .rejectedWith TypeError, "#{resource} not a valid epub (mimetype)."
 
     it "eventually throws an error if no epub container is found", ->
-      noContainer = new EPub "#{__dirname}/files/mimetype.zip"
+      resource = "#{__dirname}/files/mimetype.zip"
+      noContainer = new EPub resource
       noContainer.init().should.be
-        .rejectedWith 'No epub container file found.'
+        .rejectedWith "No epub container file found for #{resource}."
 
-  describe "#getRendition", ->
+  describe "#render", ->
     it "eventually returns object for a particular rendition", ->
-      epub.init().post('getRendition')
+      epub.init().post('render')
         .should.eventually.be.an('object')
         .and.should.eventually.contain.keys 'metadata', 'manifest', 'spine'
 
     it "eventually throws an error if index is set to high.", ->
-      epub.init().post('getRendition', [10])
-        .should.eventually.be.rejectedWith "#{book} only has 1 rendition(s)."
+      epub.init().post('render', [10])
+        .should.eventually.be
+        .rejectedWith RangeError, "#{book} only has 1 root file(s)."
 
   describe "#getFlow", ->
-    it "eventually returns an array of entries", ->
+    it "returns an array of entries", ->
       epub.init().post('getFlow')
         .should.eventually.be.an 'array'
+
+    it "throws an error if not initialized", ->
+      resource = 'uninitialized'
+      uninitializedBook = new EPub resource
+      try
+        uninitializedBook.getFlow()
+          .should.throw ReferenceError, "#{resource} must be initialized first."
+      catch error
 
   describe "#getTOC", ->
     it "eventually returns an object", ->
@@ -98,24 +114,25 @@ describe "Epub", ->
       epub.init().post('getEntryAsText', ['mimetype'])
         .should.eventually.equal 'application/epub+zip'
 
-  describe "#getZipEntryByFilename", ->
+  describe "#findZipEntry", ->
     entry = '18333fig0101-tn.png'
 
     it "eventually returns a zipEntry object if it exists", ->
-      epub.init().post('getZipEntryByFilename', [entry])
+      epub.init().post('findZipEntry', [entry])
         .should.eventually.be.an 'object'
 
     it "is case insensitive", ->
-      epub.init().post('getZipEntryByFilename', [entry.toUpperCase()])
+      epub.init().post('findZipEntry', [entry.toUpperCase()])
         .should.eventually.be.an 'object'
 
     it "eventually throws an error if the entry does not exist", ->
-      epub.init().post('getZipEntryByFilename', ['FAKEFILE'])
-        .should.eventually.be.rejectedWith 'FAKEFILE not an entry.'
+      entry = 'FAKEFILE'
+      epub.init().post('findZipEntry', [entry])
+        .should.eventually.be.rejectedWith "#{entry} not an entry in #{book}."
 
     it "eventually throws an error if not initialized first", ->
       uninitializedBook = new EPub 'uninitialized'
-      uninitializedBook.getZipEntryByFilename('file').should
+      uninitializedBook.findZipEntry('file').should
         .eventually.be.rejectedWith 'uninitialized must be initialized first.'
 
   describe "#getEntryAsBuffer", ->
