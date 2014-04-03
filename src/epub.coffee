@@ -1,3 +1,5 @@
+'use strict'
+
 URL = require 'url'
 
 _ = require 'lodash'
@@ -58,10 +60,12 @@ class EPub
         .spread(
           (mimetype, container) ->
             unless mimetype.value is 'application/epub+zip'
-              deferred.reject new TypeError "#{resource} not a valid epub (mimetype)."
+              err = new TypeError "#{resource} not a valid epub (mimetype)."
+              deferred.reject err
 
             unless container.value?.length
-              deferred.reject new Error "No epub container file found for #{resource}."
+              err = new Error "No epub container file found for #{resource}."
+              deferred.reject err
 
             deferred.notify message: "Getting rootfile(s) for #{resource}..."
             return parseXML(container.value)
@@ -112,7 +116,8 @@ class EPub
 
     else
       count = @rootfiles.length
-      deferred.reject new RangeError "#{@resource} only has #{count} root file(s)."
+      err = new RangeError "#{@resource} only has #{count} root file(s)."
+      deferred.reject err
 
     return deferred.promise
 
@@ -165,7 +170,8 @@ class EPub
           (xml) =>
             unless xml?.navmap?.navpoint
               ### @TODO: test invalid tocFile for getTOC() ###
-              deferred.reject new TypeError "#{@tocFile} is not a valid toc file."
+              err = new TypeError "#{@tocFile} is not a valid toc file."
+              deferred.reject err
 
             else
               @toc = tocMapper(xml.navmap.navpoint)

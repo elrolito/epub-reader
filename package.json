@@ -1,21 +1,34 @@
 {
   "name": "epub-reader",
-  "version": "0.0.1",
-  "description": "Promise based epub reader.",
-  "main": "index.js",
+  "version": "0.1.0",
+  "description": "Promise-based epub reader.",
+  "main": "./lib/epub.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Running mocha tests...\" && mocha ./test"
   },
   "keywords": [
     "EPub",
     "promise",
     "zip"
   ],
-  "author": "Rolando Henry <elrolito@me.com>",
+  "author": {
+    "name": "Rolando Henry",
+    "email": "elrolito@me.com",
+    "url": "https://github.com/elrolito"
+  },
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/elrolito/epub-reader"
+  },
+  "bugs": {
+    "url": "https://github.com/elrolito/epub-reader/issues"
+  },
+  "readmeFilename": "README.md",
   "devDependencies": {
     "chai": "^1.9.1",
     "chai-as-promised": "^4.1.1",
+    "coffee-script": "^1.7.1",
     "mocha": "^1.18.2",
     "mocha-as-promised": "^2.0.0",
     "sinon": "^1.9.0",
