@@ -66,7 +66,6 @@ describe "Epub", ->
       initializedBook
         .should.eventually.have.deep.property('spine').that.is.an('array')
 
-  describe "#parseZip", ->
     it "eventually rejects non-epub files (mimetype)", ->
       resource = "#{__dirname}/files/normal.zip"
       nonEpub = new EPub resource
@@ -79,6 +78,10 @@ describe "Epub", ->
       noContainer = new EPub resource
       noContainer.init().should.be
         .rejectedWith "No epub container file found for #{resource}."
+
+    it "eventually sets property isInialized to true", ->
+      epub.init().get('isInitialized')
+        .should.eventually.be.true
 
   describe "#render", ->
     it "eventually returns object for a particular rendition", ->

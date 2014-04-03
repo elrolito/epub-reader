@@ -79,7 +79,11 @@ class EPub
 
             return @render()
         )
-        .then( => return @)
+        .then(
+          =>
+            @isInitialized = true
+            return @
+        )
     )
     .catch(deferred.reject)
     .done(deferred.resolve)
