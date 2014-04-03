@@ -21,6 +21,11 @@ describe "Epub", ->
   epub = remoteEpub = null
   book = path.resolve __dirname, './files/progit.epub'
 
+  describe ".factory", ->
+    it "eventually returns a new and initialized EPub object", ->
+      EPub.factory(book)
+        .should.eventually.be.an.instanceof EPub
+
   beforeEach ->
     epub = new EPub book
     remoteEpub = new EPub 'http://www.epubbooks.com/downloads/587'
@@ -54,7 +59,9 @@ describe "Epub", ->
       initializedBook
         .should.eventually.have.deep.property('rendition').that.is.an('object')
       initializedBook
-        .should.eventually.have.deep.property('flow').that.is.an('array')
+        .should.eventually.have.deep.property('manifest').that.is.an('array')
+      initializedBook
+        .should.eventually.have.deep.property('spine').that.is.an('array')
 
   describe "#parseZip", ->
     it "eventually rejects non-epub files (mimetype)", ->
@@ -72,20 +79,24 @@ describe "Epub", ->
         .should.eventually.be.an('object')
         .and.should.eventually.contain.keys 'metadata', 'manifest', 'spine'
 
+    it "eventually throws an error if index is set to high.", ->
+      epub.init().post('getRendition', [10])
+        .should.eventually.be.rejectedWith "#{book} only has 1 rendition(s)."
+
   describe "#getFlow", ->
     it "eventually returns an array of entries", ->
       epub.init().post('getFlow')
+        .should.eventually.be.an 'array'
+
+  describe "#getTOC", ->
+    it "eventually returns an object", ->
+      epub.init().post('getTOC')
         .should.eventually.be.an 'array'
 
   describe "#getEntryAsText", ->
     it "eventually reads contents of a zip entry", ->
       epub.init().post('getEntryAsText', ['mimetype'])
         .should.eventually.equal 'application/epub+zip'
-
-    it "eventuall throws an error if not initialized first", ->
-      uninitializedBook = new EPub 'uninitialized'
-      uninitializedBook.getEntryAsText('file').should
-        .eventually.be.rejectedWith 'uninitialized must be initialized first.'
 
   describe "#getZipEntryByFilename", ->
     entry = '18333fig0101-tn.png'
@@ -102,8 +113,24 @@ describe "Epub", ->
       epub.init().post('getZipEntryByFilename', ['FAKEFILE'])
         .should.eventually.be.rejectedWith 'FAKEFILE not an entry.'
 
+    it "eventually throws an error if not initialized first", ->
+      uninitializedBook = new EPub 'uninitialized'
+      uninitializedBook.getZipEntryByFilename('file').should
+        .eventually.be.rejectedWith 'uninitialized must be initialized first.'
+
   describe "#getEntryAsBuffer", ->
     it "eventually returns a buffer if entry exists", ->
       entry = '18333fig0101-tn.png'
       epub.init().post('getEntryAsBuffer', [entry])
         .should.eventually.be.an 'object'
+
+  describe "#getEntry", ->
+    it "eventually returns and object with a buffer and mimetype", ->
+      entry = '18333fig0101-tn.png'
+      result = epub.init().post('getEntry', [entry])
+      result
+        .should.eventually.be.an('object')
+      result
+        .should.eventually.have.property('data')
+      result
+        .should.eventually.have.property('mimetype', 'image/png')

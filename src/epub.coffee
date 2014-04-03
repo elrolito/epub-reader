@@ -4,21 +4,15 @@ _ = require 'lodash'
 AdmZip = require 'adm-zip'
 HTTP = require 'q-io/http'
 Q = require 'q'
-xml2js = require 'xml2js'
 
-parserOpts =
-  async: true
-  normalize: true
-  normalizeTags: true
-  explicitArray: false
-  explicitRoot: false
-  strict: false
-  xmlns: false
-
-parser = new xml2js.Parser parserOpts
-parseXML = Q.denodeify parser.parseString
+parseXML = require './xml-parser'
 
 class EPub
+  @factory: (resource) ->
+    epub = new EPub resource
+
+    return epub.init()
+
   constructor: (@resource) ->
     @isRemote = (URL.parse @resource).host?
 
@@ -74,12 +68,12 @@ class EPub
 
             if _.isArray xml.rootfiles
               _.forEach xml.rootfiles, (rootfile) =>
-                @rootfiles.push rootfile['$']['full-path']
+                @rootfiles.push rootfile['$']['FULL-PATH']
 
             else
               @rootfiles.push xml.rootfiles.rootfile['$']['FULL-PATH']
 
-            return @getFlow()
+            return @getRendition()
         )
 
     ).catch(
@@ -93,18 +87,24 @@ class EPub
 
     return deferred.promise
 
-  getRendition: (renditionIndex = 0) ->
+  getRendition: (index = 0) ->
     deferred = Q.defer()
 
-    if @rendition?
-      deferred.resolve @rendition
+    if @rendition?[index]?
+      deferred.resolve @rendition[index]
 
-    else
-      @getEntryAsText(@rootfiles[renditionIndex])
+    else if @rootfiles[index]?
+      @getEntryAsText(@rootfiles[index])
         .then(parseXML)
         .done(
           (xml) =>
             @rendition = xml
+
+            @manifest = _.pluck xml.manifest?.item, '$'
+            @spine = _.pluck xml.spine?.itemref, '$'
+
+            tocID = xml.spine?['$']['TOC']
+            @tocFile = (_.find @manifest, ID: tocID)['HREF']
 
             deferred.resolve @rendition
 
@@ -112,9 +112,12 @@ class EPub
             deferred.reject error
         )
 
+    else
+      deferred.reject "#{@resource} only has #{@rootfiles.length} rendition(s)."
+
     return deferred.promise
 
-  getFlow: (renditionIndex = 0) ->
+  getFlow: ->
     deferred = Q.defer()
 
     if @flow?
@@ -123,65 +126,105 @@ class EPub
     else
       @flow = []
 
-      Q.when @getRendition(renditionIndex), (rendition) =>
-        @manifest = _.pluck rendition.manifest.item, '$'
-        @spine = _.pluck rendition.spine.itemref, '$'
+      _.forEach @spine, (item) =>
+        page = _.find @manifest, ID: item['IDREF']
 
-        _.forEach @spine, (item) =>
-          page = _.find @manifest, ID: item['IDREF']
+        entry =
+          id: item['IDREF']
+          href: page['HREF']
+          mimetype: page['MEDIA-TYPE']
 
-          entry =
-            id: item['IDREF']
-            href: page['HREF']
-            mimetype: page['MEDIA-TYPE']
+        @flow.push entry
 
-          @flow.push entry
-
-          deferred.resolve @flow
+        deferred.resolve @flow
 
     return deferred.promise
 
-  getEntryAsText: (entry, encoding = 'utf8') ->
+  getTOC: ->
     deferred = Q.defer()
 
-    unless @zip?
-      deferred.reject "#{@resource} must be initialized first."
+    if @toc?
+      deferred.resolve @toc
 
     else
-      @getZipEntryByFilename(entry)
-        .then(
-          (zipEntry) =>
-            @zip.readAsTextAsync zipEntry, (content) ->
-              deferred.resolve content
+      tocMapper = (navpoints) ->
+        _.map navpoints, (item) ->
+          result =
+            id: item['$']['ID']
+            order: item['$']['PLAYORDER']
+            label: item.navlabel.text
+            href: item.content['$']['SRC']
 
-            , encoding
+          if item.navpoint?.length
+            result.children = tocMapper(item.navpoint)
+
+          return result
+
+      @getEntryAsText(@tocFile)
+        .then(parseXML)
+        .then(
+          (xml) =>
+            @toc = tocMapper(xml.navmap.navpoint)
+            deferred.resolve @toc
 
           , (error) ->
             deferred.reject error
         )
 
+
     return deferred.promise
 
-  getEntryAsBuffer: (entry) ->
+  getEntryAsText: (href, encoding = 'utf8') ->
     deferred = Q.defer()
 
-    unless @zip?
-      deferred.reject "#{@resource} must be initialized first."
+    @getZipEntryByFilename(href)
+      .then(
+        (entry) =>
+          @zip.readAsTextAsync entry, (content) ->
+            deferred.resolve content
 
-    else
-      @getZipEntryByFilename(entry)
-        .then(
-          (zipEntry) =>
-            @zip.readFileAsync zipEntry, (contents) ->
-              deferred.resolve contents
+          , encoding
 
-          , (error) ->
-            deferred.reject error
-        )
+        , (error) ->
+          deferred.reject error
+      )
 
     return deferred.promise
 
-  getZipEntryByFilename: (file) ->
+  getEntryAsBuffer: (href) ->
+    deferred = Q.defer()
+
+    @getZipEntryByFilename(href)
+      .then(
+        (entry) =>
+          @zip.readFileAsync entry, (contents) ->
+            deferred.resolve contents
+
+        , (error) ->
+          deferred.reject error
+      )
+
+    return deferred.promise
+
+  getEntry: (href) ->
+    deferred = Q.defer()
+
+    @getEntryAsBuffer(href)
+      .then(
+        (data) =>
+          result =
+            data: data
+            mimetype: (_.find @manifest, HREF: href)['MEDIA-TYPE']
+
+          deferred.resolve result
+
+        , (error) ->
+          deferred.reject error
+      )
+
+    return deferred.promise
+
+  getZipEntryByFilename: (href) ->
     deferred = Q.defer()
 
     unless @zip?
@@ -189,19 +232,19 @@ class EPub
 
     else
       # Try getting entry by name first
-      fileEntry = @zip.getEntry file
+      fileEntry = @zip.getEntry href
 
       unless fileEntry?
         @entries ?= @zip.getEntries()
 
-        fileEntry = _.find @entries, (entry) ->
-          entry.entryName.toLowerCase() is file.toLowerCase()
+        fileEntry = _.find @entries, (href) ->
+          entry.entryName.toLowerCase() is href.toLowerCase()
 
       if fileEntry?
         deferred.resolve fileEntry
 
       else
-        deferred.reject "#{file} not an entry."
+        deferred.reject "#{href} not an entry."
 
     return deferred.promise
 
